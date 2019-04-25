@@ -13,3 +13,5 @@ This augmentation relies on a lot of functionality not yet in Pytorch, so I have
 2. Time Mask (DONE!)
 
 3. Frequency Mask (DONE!)
+
+Let's be friends! [@zachcaceres](https://twitter.com/zachcaceres) [zach.dev](https://zach.dev)
