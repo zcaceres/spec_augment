@@ -5,7 +5,7 @@ SpecAugment is a SOTA-achieving data augmentation approach on speech recognition
 
 ## To use:
 1. run `install.sh` (I recommend to use a unique `conda` env for the project)
-2. Check out SparseImageWarp.ipynb (a Jupyter notebook) for the functions.
+2. Check out SpecAugment.ipynb (a Jupyter notebook) for the functions.
 
 ### Augmentations
 1. Time Warp (Coming Soon)
