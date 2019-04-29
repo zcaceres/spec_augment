@@ -8,8 +8,7 @@ SpecAugment is a SOTA-achieving data augmentation approach on speech recognition
 2. Check out SpecAugment.ipynb (a Jupyter notebook) for the functions.
 
 ### Augmentations
-1. Time Warp (Coming Soon)
-This augmentation relies on a lot of functionality not yet in Pytorch, so I have to write it from scratch. I am working on it.
+1. Time Warp (DONE!)
 
 2. Time Mask (DONE!)
 
