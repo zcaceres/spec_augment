@@ -15,5 +15,5 @@ SpecAugment is a SOTA-achieving data augmentation approach on speech recognition
 3. Frequency Mask (DONE!)
 
 Let's be friends!
-[@zachcaceres](https://twitter.com/zachcaceres)
-[zach.dev](https://zach.dev)
+- [@zachcaceres](https://twitter.com/zachcaceres)
+- [zach.dev](https://zach.dev)
