@@ -5,7 +5,6 @@
 # file to edit: dev_nb/SparseImageWarp.ipynb
 
 import torch
-import numpy as np
 
 def sparse_image_warp(img_tensor,
                       source_control_point_locations,
@@ -13,14 +12,15 @@ def sparse_image_warp(img_tensor,
                       interpolation_order=2,
                       regularization_weight=0.0,
                       num_boundaries_points=0):
+    device = img_tensor.device
     control_point_flows = (dest_control_point_locations - source_control_point_locations)
 
 #     clamp_boundaries = num_boundary_points > 0
 #     boundary_points_per_edge = num_boundary_points - 1
     batch_size, image_height, image_width = img_tensor.shape
-    grid_locations = get_grid_locations(image_height, image_width)
-    flattened_grid_locations = torch.tensor(flatten_grid_locations(grid_locations, image_height, image_width))
+    flattened_grid_locations = get_flat_grid_locations(image_height, image_width, device)
 
+    # IGNORED FOR OUR BASIC VERSION...
 #     flattened_grid_locations = constant_op.constant(
 #         _expand_to_minibatch(flattened_grid_locations, batch_size), image.dtype)
 
@@ -43,16 +43,20 @@ def sparse_image_warp(img_tensor,
 
     return warped_image, dense_flows
 
-def get_grid_locations(image_height, image_width):
-    """Wrapper for np.meshgrid."""
-
-    y_range = np.linspace(0, image_height - 1, image_height)
-    x_range = np.linspace(0, image_width - 1, image_width)
-    y_grid, x_grid = np.meshgrid(y_range, x_range, indexing='ij')
-    return np.stack((y_grid, x_grid), -1)
+def get_grid_locations(image_height, image_width, device):
+    y_range = torch.linspace(0, image_height - 1, image_height, device=device)
+    x_range = torch.linspace(0, image_width - 1, image_width, device=device)
+    y_grid, x_grid = torch.meshgrid(y_range, x_range)
+    return torch.stack((y_grid, x_grid), -1)
 
 def flatten_grid_locations(grid_locations, image_height, image_width):
-    return np.reshape(grid_locations, [image_height * image_width, 2])
+    return torch.reshape(grid_locations, [image_height * image_width, 2])
+
+def get_flat_grid_locations(image_height, image_width, device):
+    y_range = torch.linspace(0, image_height - 1, image_height, device=device)
+    x_range = torch.linspace(0, image_width - 1, image_width, device=device)
+    y_grid, x_grid = torch.meshgrid(y_range, x_range)
+    return torch.stack((y_grid, x_grid), -1).reshape([image_height * image_width, 2])
 
 def create_dense_flows(flattened_flows, batch_size, image_height, image_width):
     # possibly .view
@@ -67,6 +71,7 @@ def interpolate_spline(train_points, train_values, query_points, order, regulari
     return query_values
 
 def solve_interpolation(train_points, train_values, order, regularization_weight):
+    device = train_points.device
     b, n, d = train_points.shape
     k = train_values.shape[-1]
 
@@ -79,41 +84,33 @@ def solve_interpolation(train_points, train_values, order, regularization_weight
     f = train_values.float()
 
     matrix_a = phi(cross_squared_distance_matrix(c,c), order).unsqueeze(0)  # [b, n, n]
-#     print('Matrix A', matrix_a, matrix_a.shape)
 #     if regularization_weight > 0:
 #         batch_identity_matrix = array_ops.expand_dims(
 #           linalg_ops.eye(n, dtype=c.dtype), 0)
 #         matrix_a += regularization_weight * batch_identity_matrix
 
     # Append ones to the feature values for the bias term in the linear model.
-    ones = torch.ones(1, dtype=train_points.dtype).view([-1, 1, 1])
+    ones = torch.ones(1, dtype=train_points.dtype, device=device).view([-1, 1, 1])
     matrix_b = torch.cat((c, ones), 2).float()  # [b, n, d + 1]
-#     print('Matrix B', matrix_b, matrix_b.shape)
 
     # [b, n + d + 1, n]
     left_block = torch.cat((matrix_a, torch.transpose(matrix_b, 2, 1)), 1)
-#     print('Left Block', left_block, left_block.shape)
 
     num_b_cols = matrix_b.shape[2]  # d + 1
-#     print('Num_B_Cols', matrix_b.shape)
-    #     lhs_zeros = torch.zeros((b, num_b_cols, num_b_cols), dtype=train_points.dtype).float()
 
-    # In Tensorflow, zeros are used here. Pytorch gesv fails with zeros for some reason we don't understand.
+    # In Tensorflow, zeros are used here. Pytorch solve fails with zeros for some reason we don't understand.
     # So instead we use very tiny randn values (variance of one, zero mean) on one side of our multiplication.
-    lhs_zeros = torch.randn((b, num_b_cols, num_b_cols)) / 1e10
+    lhs_zeros = torch.randn((b, num_b_cols, num_b_cols), device=device) / 1e10
     right_block = torch.cat((matrix_b, lhs_zeros),
                                    1)  # [b, n + d + 1, d + 1]
-#     print('Right Block', right_block, right_block.shape)
     lhs = torch.cat((left_block, right_block),
                            2)  # [b, n + d + 1, n + d + 1]
-#     print('LHS', lhs, lhs.shape)
 
-    rhs_zeros = torch.zeros((b, d + 1, k), dtype=train_points.dtype).float()
+    rhs_zeros = torch.zeros((b, d + 1, k), dtype=train_points.dtype, device=device).float()
     rhs = torch.cat((f, rhs_zeros), 1)  # [b, n + d + 1, k]
-#     print('RHS', rhs, rhs.shape)
 
     # Then, solve the linear system and unpack the results.
-    X, LU = torch.gesv(rhs, lhs)
+    X, LU = torch.solve(rhs, lhs)
     w = X[:, :n, :]
     v = X[:, n:, :]
 
@@ -148,7 +145,7 @@ def phi(r, order):
     Returns:
     phi_k evaluated coordinate-wise on r, for k = r
     """
-    EPSILON=torch.tensor(1e-10)
+    EPSILON=torch.tensor(1e-10, device=r.device)
     # using EPSILON prevents log(0), sqrt0), etc.
     # sqrt(0) is well-defined, but its gradient is not
     if order == 1:
@@ -182,11 +179,8 @@ def apply_interpolation(query_points, train_points, w, v, order):
     """
     query_points = query_points.unsqueeze(0)
     # First, compute the contribution from the rbf term.
-#     print(query_points.shape, train_points.shape)
     pairwise_dists = cross_squared_distance_matrix(query_points.float(), train_points.float())
-#     print('Pairwise', pairwise_dists)
     phi_pairwise_dists = phi(pairwise_dists, order)
-#     print('Pairwise phi', phi_pairwise_dists)
 
     rbf_term = torch.matmul(phi_pairwise_dists, w)
 
@@ -229,24 +223,22 @@ def dense_image_warp(image, flow):
     """
     image = image.unsqueeze(3) # add a single channel dimension to image tensor
     batch_size, height, width, channels = image.shape
+    device = image.device
 
     # The flow is defined on the image grid. Turn the flow into a list of query
     # points in the grid space.
     grid_x, grid_y = torch.meshgrid(
-        torch.arange(width), torch.arange(height))
+        torch.arange(width, device=device), torch.arange(height, device=device))
 
     stacked_grid = torch.stack((grid_y, grid_x), dim=2).float()
-#     print('stacked', stacked_grid.shape)
 
     batched_grid = stacked_grid.unsqueeze(-1).permute(3, 1, 0, 2)
-#     print('batched_grid', batched_grid.shape)
 
     query_points_on_grid = batched_grid - flow
     query_points_flattened = torch.reshape(query_points_on_grid,
                                                [batch_size, height * width, 2])
     # Compute values at the query points, then reshape the result back to the
     # image grid.
-#     print('Query points', query_points_flattened, query_points_flattened.shape)
     interpolated = interpolate_bilinear(image, query_points_flattened)
     interpolated = torch.reshape(interpolated,
                                      [batch_size, height, width, channels])
@@ -284,17 +276,15 @@ def interpolate_bilinear(grid,
     shape = [batch_size, height, width, channels]
     query_type = query_points.dtype
     grid_type = grid.dtype
+    grid_device = grid.device
 
     num_queries = query_points.shape[1]
-#     print('Num queries', num_queries)
 
     alphas = []
     floors = []
     ceils = []
     index_order = [0, 1] if indexing == 'ij' else [1, 0]
-#     print(query_points.shape)
     unstacked_query_points = query_points.unbind(2)
-#     print('Squeezed query_points', unstacked_query_points[0].shape, unstacked_query_points[1].shape)
 
     for dim in index_order:
         queries = unstacked_query_points[dim]
@@ -303,8 +293,8 @@ def interpolate_bilinear(grid,
 
         # max_floor is size_in_indexing_dimension - 2 so that max_floor + 1
         # is still a valid index into the grid.
-        max_floor = torch.tensor(size_in_indexing_dimension - 2, dtype=query_type)
-        min_floor = torch.tensor(0.0, dtype=query_type)
+        max_floor = torch.tensor(size_in_indexing_dimension - 2, dtype=query_type, device=grid_device)
+        min_floor = torch.tensor(0.0, dtype=query_type, device=grid_device)
         maxx = torch.max(min_floor, torch.floor(queries))
         floor = torch.min(maxx, max_floor)
         int_floor = floor.long()
@@ -314,9 +304,11 @@ def interpolate_bilinear(grid,
 
         # alpha has the same type as the grid, as we will directly use alpha
         # when taking linear combinations of pixel values from the image.
-        alpha = torch.tensor(queries - floor, dtype=grid_type)
-        min_alpha = torch.tensor(0.0, dtype=grid_type)
-        max_alpha = torch.tensor(1.0, dtype=grid_type)
+
+
+        alpha = (queries - floor).clone().detach().type(grid_type)
+        min_alpha = torch.tensor(0.0, dtype=grid_type, device=grid_device)
+        max_alpha = torch.tensor(1.0, dtype=grid_type, device=grid_device)
         alpha = torch.min(torch.max(min_alpha, alpha), max_alpha)
 
         # Expand alpha to [b, n, 1] so we can use broadcasting
@@ -327,7 +319,7 @@ def interpolate_bilinear(grid,
     flattened_grid = torch.reshape(
       grid, [batch_size * height * width, channels])
     batch_offsets = torch.reshape(
-      torch.arange(batch_size) * height * width, [batch_size, 1])
+      torch.arange(batch_size, device=grid_device) * height * width, [batch_size, 1])
 
     # This wraps array_ops.gather. We reshape the image data such that the
     # batch, y, and x coordinates are pulled into the first dimension.
