@@ -70,7 +70,7 @@ def interpolate_spline(train_points, train_values, query_points, order, regulari
 
     return query_values
 
-def solve_interpolation(train_points, train_values, order, regularization_weight):
+def solve_interpolation(train_points, train_values, order, regularization_weight, eps=1e-7):
     device = train_points.device
     b, n, d = train_points.shape
     k = train_values.shape[-1]
@@ -90,7 +90,7 @@ def solve_interpolation(train_points, train_values, order, regularization_weight
 #         matrix_a += regularization_weight * batch_identity_matrix
 
     # Append ones to the feature values for the bias term in the linear model.
-    ones = torch.ones(1, dtype=train_points.dtype, device=device).view([-1, 1, 1])
+    ones = torch.ones(n, dtype=train_points.dtype, device=device).view([-1, n, 1])
     matrix_b = torch.cat((c, ones), 2).float()  # [b, n, d + 1]
 
     # [b, n + d + 1, n]
@@ -100,7 +100,7 @@ def solve_interpolation(train_points, train_values, order, regularization_weight
 
     # In Tensorflow, zeros are used here. Pytorch solve fails with zeros for some reason we don't understand.
     # So instead we use very tiny randn values (variance of one, zero mean) on one side of our multiplication.
-    lhs_zeros = torch.randn((b, num_b_cols, num_b_cols), device=device) / 1e10
+    lhs_zeros = torch.randn((b, num_b_cols, num_b_cols), device=device) *eps
     right_block = torch.cat((matrix_b, lhs_zeros),
                                    1)  # [b, n + d + 1, d + 1]
     lhs = torch.cat((left_block, right_block),
@@ -113,7 +113,6 @@ def solve_interpolation(train_points, train_values, order, regularization_weight
     X, LU = torch.solve(rhs, lhs)
     w = X[:, :n, :]
     v = X[:, n:, :]
-
     return w, v
 
 def cross_squared_distance_matrix(x, y):
